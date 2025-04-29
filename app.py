@@ -1,7 +1,12 @@
 from flask import Flask, request, jsonify
 import boto3
+from botocore.exceptions import ClientError
+from apscheduler.schedulers.background import BackgroundScheduler
+from logging.config import dictConfig
 import os
 from datetime import datetime
+import re
+import atexit
 
 REGION_DYNAMO_DB = "ap-south-1"  # region for DynamoDB tables
 REGIONS_EC2 = ["eu-central-1", "us-east-1", "ap-south-1"]  # EC2 regions to display
@@ -10,12 +15,36 @@ STATE_FILTER_INCLUDE_PATTERNS = ['pending', 'running', 'stopping', 'stopped', 's
 NAME_FILTER_EXCLUDE_PATTERNS = ["CI", "terminated"]
 
 # tagging config
-DEFAULT_SCHEDULE_TAG_NAME = 'Scheduled_for'
+DEFAULT_SCHEDULE_TAG_NAME = 'ScheduledFor'
 
 MULTI_REGIONAL = len(REGIONS_EC2) > 1 
 
 # DynamoDB connection config
 CONFIG_TABLE_NAME = "instance-scheduler-ConfigTable" 
+
+
+# Configure logging
+dictConfig({
+    'version': 1,
+    'formatters': {
+        'default': {
+            'format': '[%(asctime)s] %(levelname)s in %(module)s: %(message)s',
+        }
+    },
+    'handlers': {
+        'wsgi': {
+            'class': 'logging.StreamHandler',
+            'stream': 'ext://flask.logging.wsgi_errors_stream',
+            'formatter': 'default'
+        }
+    },
+    'root': {
+        'level': 'INFO',
+        'handlers': ['wsgi']
+    }
+})
+
+app = Flask(__name__)
 
 def create_aws_connections():
     """Create AWS connections to DynamoDB and EC2 clients."""
@@ -207,6 +236,7 @@ def get_filtered_ec2_instances(for_tag: str):
                     instance_data = {
                         'InstanceId': instance['InstanceId'],
                         'Name': name,
+                        'CurrentState' : instance['State']['Name']
                         # 'Tags': tags,
                         # 'Region': region,
                     }
@@ -215,6 +245,56 @@ def get_filtered_ec2_instances(for_tag: str):
         result[region] = instances
     
     return result
+
+def instance_action(action: str, current_state: str, instance_id:str, instance_name: str, region: str, schedule_name: str):
+
+    result = {
+        'schedules_processed': 0,
+        'instances_modified': 0,
+        'state_changes': [],
+        'errors': []
+    }
+
+    try:
+        ec2_client = EC2_CLIENTS[region]
+
+        # print(f"for instance {instance_id} we are performing action as {action}")
+        if action.lower() == 'start' and current_state == 'stopped':
+            ec2_client.start_instances(InstanceIds=[instance_id])
+            result['state_changes'].append({
+                'instance_id': instance_id,
+                'instance_name': instance_name,
+                'region': region,
+                DEFAULT_SCHEDULE_TAG_NAME: schedule_name,
+                'action': 'start',
+                'from_state': 'stopped',
+                'to_state': 'pending'
+            })
+            result['instances_modified'] += 1
+            print(f"Started instance {instance_id} ({instance_name}) in region {region}")
+            
+        elif action.lower() == 'stop' and current_state == 'running':
+            ec2_client.stop_instances(InstanceIds=[instance_id])
+            result['state_changes'].append({
+                'instance_id': instance_id,
+                'instance_name': instance_name,
+                'region': region,
+                DEFAULT_SCHEDULE_TAG_NAME: schedule_name,
+                'action': 'stop',
+                'from_state': 'running',
+                'to_state': 'stopping'
+            })
+            result['instances_modified'] += 1
+            print(f"Stopped instance {instance_id} ({instance_name}) in region {region}")
+        
+    except ClientError as e:
+        result['errors'].append({
+            'instance_id': instance_id,
+            'region': region,
+            'error': str(e),
+            'action_attempted': schedule['action'].lower()
+        })
+
 
 def schedule_factory(data: dict):
     """Create data to insert in config table"""
@@ -271,13 +351,74 @@ def add_schedule_tag():
 
     return jsonify(result)
 
-@app.route('/api/v1/action', methods=['GET'])
-def action():
+@app.route('/api/v1/get_schedule/active', methods=['GET'])
+def get_all_active_schedules():
 
-    data =  db_get_items(CONFIG_TABLE_NAME, filter_expression="active = :active_val", expression_attribute_values={":active_val": "true"})
-    
-    print(f"db records {data}")
+    applied_on_instances = []
+
+    ## get all active schedule and perform action
+
+    active_schedules =  db_get_items(CONFIG_TABLE_NAME, filter_expression="active = :active_val", expression_attribute_values={":active_val": "true"})
+
+    for schedule in active_schedules:
+
+        instances =  get_filtered_ec2_instances(schedule['name'])
+
+        print(f"got cron_expression as  {schedule['cron_expression']} and until as {schedule['until']}")
+
+        will_execute = should_execute(cron_expression=schedule['cron_expression'], until_date=schedule['until'])
+
+        print(f"will_execute {will_execute}")
+
+        if will_execute == True:
+
+            for region, instances in instances.items():
+
+                print(f"Region: {region}")
+
+                if instances:  # Check if the list is not empty
+                    for instance in instances:
+                        # print(f"  Instance ID: {instance['InstanceId']}")
+                        # print(f"  Name: {instance['Name']}")
+
+                        applied_on_instances = instance_action(action=schedule['action'], current_state=instance['CurrentState'], instance_id=instance['InstanceId'], instance_name=instance['Name'], region=region, schedule_name=schedule['name'])
+                else:
+                    print("  No instances in this region {region}")
+        
+    return jsonify(applied_on_instances)
+
+@app.route('/api/v1/schedule/instance', methods=['GET'])
+def schedule_instance():
+
+    data = request.get_json()
+    instance_id = data['instance_id']
+    schedule_name = data['schedule_name']
+    instance_region = data['instance_region']
+
+    result = add_tag_to_ec2_instance(instance_id, instance_region, schedule_name, tag_name=DEFAULT_SCHEDULE_TAG_NAME)
+
     return jsonify(data)
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+def cron_trigerred():
+    print(f"cron trigerred")
+
+# Initialize scheduler
+scheduler = BackgroundScheduler()
+# scheduler.add_job(
+#     func=return_default_tag_to_instances,
+#     trigger="cron",
+#     hour=CRON_START_HOUR,
+#     minute=CRON_START_MINUTE,
+#     timezone=CRON_TIMEZONE
+# )
+
+# Test cron
+scheduler.add_job(
+    func=cron_trigerred,
+    trigger="interval",
+    seconds=15,
+    timezone="Asia/Kolkata"
+)   
+
+scheduler.start()
+atexit.register(lambda: scheduler.shutdown())

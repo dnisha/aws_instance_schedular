@@ -67,8 +67,8 @@ def should_process_run(cron_expression: str, until_date: str) -> bool:
 # Test cases
 if __name__ == "__main__":
     # Test case 1: Should run at 01:05 on or before 2025-05-10
-    cron_expr = "5 1 * * *"
-    until_date = "2025-05-10"
+    cron_expr = "* * * * *"
+    until_date = "2025-02-10"
     
     # Simulate current time being 2025-04-30 01:05:00
     test_time = datetime(2025, 4, 30, 1, 5)
@@ -78,7 +78,7 @@ if __name__ == "__main__":
         print(should_process_run(cron_expr, until_date))  # Should print True
     
     # Simulate current time being 2025-05-11 01:05:00 (after until_date)
-    test_time = datetime(2025, 5, 11, 1, 5)
+    test_time = datetime(2025, 4, 29, 1, 5)
     with mock.patch('datetime.datetime') as mock_datetime:
         mock_datetime.now.return_value = test_time
         print(should_process_run(cron_expr, until_date))  # Should print False

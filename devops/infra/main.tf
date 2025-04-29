@@ -34,7 +34,7 @@ resource "aws_dynamodb_table" "config_table" {
     type = "S"
   }
   attribute {
-    name = "status"
+    name = "active"
     type = "S"
   }
 
@@ -68,8 +68,8 @@ resource "aws_dynamodb_table" "config_table" {
   }
 
   global_secondary_index {
-    name            = "statusIndex"
-    hash_key        = "status"
+    name            = "activeIndex"
+    hash_key        = "active"
     projection_type = "ALL"
   }
 }

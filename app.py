@@ -10,7 +10,7 @@ STATE_FILTER_INCLUDE_PATTERNS = ['pending', 'running', 'stopping', 'stopped', 's
 NAME_FILTER_EXCLUDE_PATTERNS = ["CI", "terminated"]
 
 # tagging config
-DEFAULT_SCHEDULE_TAG_NAME = "scheduled_for" 
+DEFAULT_SCHEDULE_TAG_NAME = 'Scheduled_for'
 
 MULTI_REGIONAL = len(REGIONS_EC2) > 1 
 
@@ -40,33 +40,146 @@ def db_put_item(table_name: str, item: dict) -> dict:
     """Put item into DynamoDB table."""
     return DYNAMODB_RESOURCE.Table(table_name).put_item(Item=item)
 
+def db_get_items(
+    table_name: str,
+    filter_expression: str = None,
+    expression_attribute_values: dict = None,
+    projection_expression: str = None,
+    limit: int = None
+) -> list:
+    """
+    Scan entire DynamoDB table and return all items (with pagination handling).
+    
+    Args:
+        table_name: Name of the DynamoDB table
+        filter_expression: Optional filter (e.g., "status = :active")
+        expression_attribute_values: Values for filters (e.g., {":active": True})
+        projection_expression: Attributes to return (e.g., "id, name")
+        limit: Maximum number of items to return (optional)
+        
+    Returns:
+        list: All items matching the criteria
+    """
+    table = DYNAMODB_RESOURCE.Table(table_name)
+    items = []
+    scan_args = {}
+
+    # Build scan parameters
+    if filter_expression:
+        scan_args['FilterExpression'] = filter_expression
+    if expression_attribute_values:
+        scan_args['ExpressionAttributeValues'] = expression_attribute_values
+    if projection_expression:
+        scan_args['ProjectionExpression'] = projection_expression
+    if limit:
+        scan_args['Limit'] = limit
+
+    # Initial scan
+    response = table.scan(**scan_args)
+    items.extend(response.get('Items', []))
+
+    # Paginate through all results (DynamoDB has 1MB limit per scan)
+    while 'LastEvaluatedKey' in response:
+        scan_args['ExclusiveStartKey'] = response['LastEvaluatedKey']
+        response = table.scan(**scan_args)
+        items.extend(response.get('Items', []))
+        
+        # Early exit if limit reached
+        if limit and len(items) >= limit:
+            break
+
+    return items[:limit] if limit else items
+
 def add_tag_to_ec2_instance(instance_id, instance_region, schedule_name, tag_name=DEFAULT_SCHEDULE_TAG_NAME):
     return EC2_CLIENTS[instance_region].create_tags(Resources=[instance_id], Tags=[{"Key": tag_name, "Value": schedule_name}])
 
-def get_filtered_ec2_instances(use_tag: bool):
+def should_execute(cron_expression: str, until_date: str) -> bool:
+    """
+    Check if the current time matches the cron expression and is on or before the until date.
+    
+    Args:
+        cron_expression: A string in cron format (e.g., "5 1 * * *")
+        until_date: A string in YYYY-MM-DD format (e.g., "2025-05-10")
+        
+    Returns:
+        bool: True if the process should run now, False otherwise
+    """
+    try:
+        # Parse cron expression
+        cron_parts = re.split(r'\s+', cron_expression.strip())
+        if len(cron_parts) != 5:
+            raise ValueError("Invalid cron expression format")
+            
+        minute, hour, day_of_month, month, day_of_week = cron_parts
+        
+        # Parse until date (at midnight to include the entire day)
+        until = datetime.strptime(until_date, "%Y-%m-%d").date()
+        now = datetime.now()
+        current_date = now.date()
+        
+        # Check if current date is after until date
+        if current_date > until:
+            return False
+        
+        # Check minute
+        if minute != '*' and str(now.minute) != minute:
+            return False
+            
+        # Check hour
+        if hour != '*' and str(now.hour) != hour:
+            return False
+            
+        # Check day of month
+        if day_of_month != '*' and str(now.day) != day_of_month:
+            return False
+            
+        # Check month
+        if month != '*' and str(now.month) != month:
+            return False
+            
+        # Check day of week (0-6 where 0 is Sunday)
+        if day_of_week != '*':
+            # Convert cron day of week to Python's weekday (0=Monday)
+            cron_dow = int(day_of_week)
+            # Sunday special case (cron: 0 or 7 = Sunday, Python: 6 = Sunday)
+            if cron_dow == 0 or cron_dow == 7:
+                if now.weekday() != 6:  # Python's Sunday
+                    return False
+            elif (cron_dow - 1) != now.weekday():
+                return False
+                
+        # All checks passed - should run now
+        return True
+        
+    except Exception as e:
+        print(f"Error processing cron expression: {e}")
+        return False
+
+def get_filtered_ec2_instances(for_tag: str):
     """
     Retrieves EC2 instances from specified regions that match state patterns and exclude name patterns.
     
     Returns:
         dict: A dictionary with region as key and list of filtered instances as value
     """
-    
     result = {}
     
     for region, ec2_client in EC2_CLIENTS.items():
-
+        # Start with the state filter
         filter_pattern = [{
-                'Name': 'instance-state-name',
-                'Values': STATE_FILTER_INCLUDE_PATTERNS
-            }]
+            'Name': 'instance-state-name',
+            'Values': STATE_FILTER_INCLUDE_PATTERNS
+        }]
         
-        if use_tag == True:
-            filter_pattern.append({{'Name': "Schedule", 'Values': ['test']}})
+        # Only add the tag filter if use_tag is True and for_tag is provided
+        if for_tag:
+            filter_pattern.append({
+                'Name': f'tag:{DEFAULT_SCHEDULE_TAG_NAME}',
+                'Values': [for_tag]
+            })
         
-        # Describe instances with state filter
-        response = ec2_client.describe_instances(
-            Filters = filter_pattern
-        )
+        # Describe instances with filters
+        response = ec2_client.describe_instances(Filters=filter_pattern)
         
         instances = []
         
@@ -93,17 +206,9 @@ def get_filtered_ec2_instances(use_tag: bool):
                 if include_instance:
                     instance_data = {
                         'InstanceId': instance['InstanceId'],
-                        # 'InstanceType': instance['InstanceType'],
-                        # 'State': instance['State']['Name'],
                         'Name': name,
                         # 'Tags': tags,
-                        # 'LaunchTime': instance['LaunchTime'].isoformat(),
-                        # 'PrivateIpAddress': instance.get('PrivateIpAddress', ''),
-                        # 'PublicIpAddress': instance.get('PublicIpAddress', ''),
                         # 'Region': region,
-                        # 'VpcId': instance.get('VpcId', ''),
-                        # 'SubnetId': instance.get('SubnetId', ''),
-                        # 'ImageId': instance.get('ImageId', '')
                     }
                     instances.append(instance_data)
         
@@ -118,12 +223,13 @@ def schedule_factory(data: dict):
     day_of_month = data['day_of_month']
     month = data['month']
     week = data['week']
+    status = str(data.get('status', 'false')).lower()
 
     schedule_data = {
         'name': data['name'],
         'type': data['type'],
         'action': data['action'],
-        'status': data['status'],
+        'active': status,
         'until': data['until'], 
         'cron_expression': f"{minute} {hour} {day_of_month} {month} {week}",
     }
@@ -145,7 +251,11 @@ def schedule():
 
 @app.route('/api/v1/instances', methods=['GET'])
 def get_instances():
-    result = get_filtered_ec2_instances(False)
+
+    for_tag = request.args.get('for_tag') 
+
+    print(f"for_tag {for_tag}")
+    result = get_filtered_ec2_instances(for_tag)
     return jsonify(result)
 
 @app.route('/api/v1/create_tag', methods=['POST'])
@@ -160,6 +270,14 @@ def add_schedule_tag():
     result = add_tag_to_ec2_instance(instance_id, instance_region, schedule_name, tag_name=DEFAULT_SCHEDULE_TAG_NAME)
 
     return jsonify(result)
+
+@app.route('/api/v1/action', methods=['GET'])
+def action():
+
+    data =  db_get_items(CONFIG_TABLE_NAME, filter_expression="active = :active_val", expression_attribute_values={":active_val": "true"})
+    
+    print(f"db records {data}")
+    return jsonify(data)
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

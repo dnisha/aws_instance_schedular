@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+<div class="aws-scheduler">
+  <h1>Create New Schedule</h1>
+  
+  <form method="POST" action="/create-schedule" class="schedule-form">
+    <div class="form-group">
+      <label for="name">Schedule Name:</label>
+      <input type="text" id="name" name="name" required placeholder="Enter schedule name">
+    </div>
+
+    <div class="form-group">
+      <label for="type">Schedule Type:</label>
+      <select id="type" name="type" class="form-control" required onchange="toggleUntilDate()">
+        <option value="recurring">Recurring</option>
+        <option value="one-time">One-Time</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label for="action">Action:</label>
+      <select id="action" name="action" class="form-control" required>
+        <option value="start">start</option>
+        <option value="stop">stop</option>
+      </select>
+      <!-- <input type="text" id="action" name="action" class="form-control" required placeholder="start or stop"> -->
+    </div>
+
+    <div class="form-group">
+      <label for="status">Status:</label>
+      <select id="status" name="status" class="form-control" required>
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+    </div>
+
+    <div class="form-group" id="until-date-group" style="display: none;">
+      <label for="until">Until Date:</label>
+      <input type="date" id="until" name="until" class="form-control">
+    </div>
+
+    <h3>Schedule Timing</h3>
+    
+    <div class="form-group">
+      <label for="minute">Minute (0-59 or *):</label>
+      <input type="text" id="minute" name="minute" class="form-control" value="*" required>
+    </div>
+
+    <div class="form-group">
+      <label for="hour">Hour (0-23 or *):</label>
+      <input type="text" id="hour" name="hour" class="form-control" value="*" required>
+    </div>
+
+    <div class="form-group">
+      <label for="day_of_month">Day of Month (1-31 or *):</label>
+      <input type="text" id="day_of_month" name="day_of_month" class="form-control" value="*" required>
+    </div>
+
+    <div class="form-group">
+      <label for="month">Month (1-12 or *):</label>
+      <input type="text" id="month" name="month" class="form-control" value="*" required>
+    </div>
+
+    <div class="form-group">
+      <label for="week">Week (0-6 or *):</label>
+      <input type="text" id="week" name="week" class="form-control" value="*" required>
+    </div>
+
+    <button type="submit" class="btn">Create Schedule</button>
+  </form>
+</div>
+
+<script>
+  function toggleUntilDate() {
+    const typeSelect = document.getElementById('type');
+    const untilDateGroup = document.getElementById('until-date-group');
+    const untilInput = document.getElementById('until');
+    
+    if (typeSelect.value === 'recurring') {
+      untilDateGroup.style.display = 'block';
+      untilInput.required = true;
+    } else {
+      untilDateGroup.style.display = 'none';
+      untilInput.required = false;
+    }
+  }
+
+  // Initialize the form on page load
+  document.addEventListener('DOMContentLoaded', function() {
+    toggleUntilDate();
+  });
+</script>
+{% endblock %}

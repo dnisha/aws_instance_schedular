@@ -1,0 +1,111 @@
+{% extends 'base.html' %} {% block content %}
+<link
+  rel="stylesheet"
+  href="{{ url_for('static', filename='css/style.css') }}"
+/>
+
+<div class="aws-scheduler landing-page">
+  <h1>AWS Instance Scheduler</h1>
+
+  <div class="landing-options">
+    <div
+      class="landing-card"
+      onclick="window.location.href='{{ url_for('get_instances') }}'"
+    >
+      <div class="card-icon">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="48"
+          height="48"
+          fill="currentColor"
+          viewBox="0 0 16 16"
+        >
+          <path
+            d="M3 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V2zm6 11a1 1 0 1 0-2 0 1 1 0 0 0 2 0z"
+          />
+        </svg>
+      </div>
+      <h3>Manage Instances</h3>
+      <p>View and schedule your EC2 instances</p>
+      <button class="btn">Go to Instances</button>
+    </div>
+
+    <div
+      class="landing-card"
+      onclick="window.location.href='{{ url_for('schedule_job') }}'"
+    >
+      <div class="card-icon">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="48"
+          height="48"
+          fill="currentColor"
+          viewBox="0 0 16 16"
+        >
+          <path
+            d="M8 7a.5.5 0 0 1 .5.5v1.5H10a.5.5 0 0 1 0 1H8.5V12a.5.5 0 0 1-1 0v-1.5H6a.5.5 0 0 1 0-1h1.5V7.5A.5.5 0 0 1 8 7z"
+          />
+          <path
+            d="M3.5 0a.5.5 0 0 1 .5.5V1h8V.5a.5.5 0 0 1 1 0V1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5zM1 4v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4H1z"
+          />
+        </svg>
+      </div>
+      <h3>Manage Schedules</h3>
+      <p>Create and manage your scheduling rules</p>
+      <button class="btn">Go to Schedules</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .landing-page {
+    text-align: center;
+    padding: 2rem;
+  }
+
+  .landing-options {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    margin-top: 2rem;
+    flex-wrap: wrap;
+  }
+
+  .landing-card {
+    width: 300px;
+    padding: 2rem;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    cursor: pointer;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+  }
+
+  .landing-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+  }
+
+  .card-icon {
+    margin-bottom: 1rem;
+    color: #0d6efd;
+  }
+
+  .landing-card h3 {
+    margin-bottom: 0.5rem;
+    color: #333;
+  }
+
+  .landing-card p {
+    color: #666;
+    margin-bottom: 1.5rem;
+  }
+
+  @media (max-width: 768px) {
+    .landing-options {
+      flex-direction: column;
+      align-items: center;
+    }
+  }
+</style>
+{% endblock %}

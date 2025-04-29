@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+<div class="aws-scheduler">
+  <h1>AWS Instance Scheduler</h1>
+  <h2>EC2 Instances</h2>
+
+  <form method="POST" action="/schedule-instances">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Select</th>
+          <th>Instance Name</th>
+          <th>Instance ID</th>
+          <th>State</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for instance in instances %}
+        <tr>
+          <td>
+            <input type="checkbox" 
+                   name="selected_instances" 
+                   value="{{ instance.InstanceId }}::{{ instance.Region }}">
+          </td>
+          <td>{{ instance.Name }}</td>
+          <td><code>{{ instance.InstanceId }}</code></td>
+          <td>
+            <span class="state-badge state-{{ instance.CurrentState|lower }}">
+              {{ instance.CurrentState }}
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    
+    <div class="form-group">
+      <label for="schedule_name">Schedule Name:</label>
+      <input type="text" id="schedule_name" name="schedule_name" required placeholder="Enter schedule name">
+    </div>
+    
+    <button type="submit" class="btn">Apply Schedule</button>
+  </form>
+</div>
+{% endblock %}

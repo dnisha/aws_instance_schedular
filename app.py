@@ -1,4 +1,7 @@
-from flask import Flask, request, jsonify
+from flask import Flask, render_template, request, jsonify
+from flask import url_for
+from flask import request
+from flask import redirect
 import boto3
 from botocore.exceptions import ClientError
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -330,7 +333,7 @@ def schedule():
     return jsonify(result)
 
 @app.route('/api/v1/instances', methods=['GET'])
-def get_instances():
+def instances():
 
     for_tag = request.args.get('for_tag') 
 
@@ -399,11 +402,33 @@ def schedule_instance():
 
     return jsonify(data)
 
+@app.route('/instances')
+def get_instances():
+    # Get all instances (pass None to get all instances regardless of tag)
+    all_instances = get_filtered_ec2_instances(for_tag=None)
+    
+    # Flatten the instances from all regions into a single list
+    instances_list = []
+    for region, instances in all_instances.items():
+        for instance in instances:
+            instance['Region'] = region  # Add region to each instance
+            instances_list.append(instance)
+    
+    return render_template('instances.html', instances=instances_list)
+
+@app.route('/schedule')
+def schedule_job():    
+    return render_template('schedule.html')
+
+@app.route('/')
+def landing():    
+    return render_template('landing.html')
+
 def cron_trigerred():
     print(f"cron trigerred")
 
 # Initialize scheduler
-scheduler = BackgroundScheduler()
+# scheduler = BackgroundScheduler()
 # scheduler.add_job(
 #     func=return_default_tag_to_instances,
 #     trigger="cron",
@@ -413,12 +438,12 @@ scheduler = BackgroundScheduler()
 # )
 
 # Test cron
-scheduler.add_job(
-    func=cron_trigerred,
-    trigger="interval",
-    seconds=15,
-    timezone="Asia/Kolkata"
-)   
+# scheduler.add_job(
+#     func=cron_trigerred,
+#     trigger="interval",
+#     seconds=15,
+#     timezone="Asia/Kolkata"
+# )   
 
-scheduler.start()
-atexit.register(lambda: scheduler.shutdown())
+# scheduler.start()
+# atexit.register(lambda: scheduler.shutdown())

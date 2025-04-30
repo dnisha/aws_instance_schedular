@@ -6,7 +6,7 @@ provider "aws" {
 resource "aws_dynamodb_table" "config_table" {
   name         = "instance-scheduler-ConfigTable"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "type"
+  hash_key     = "schedule_type"
   range_key    = "name"
 
   # 'name': data['name'],
@@ -26,7 +26,7 @@ resource "aws_dynamodb_table" "config_table" {
   }
 
   attribute {
-    name = "type"
+    name = "schedule_type"
     type = "S"
   }
   attribute {
@@ -47,6 +47,12 @@ resource "aws_dynamodb_table" "config_table" {
   attribute {
     name = "cron_expression"
     type = "S"
+  }
+
+  global_secondary_index {
+    name            = "scheduleTypeIndex"
+    hash_key        = "schedule_type"
+    projection_type = "ALL"
   }
 
   global_secondary_index {

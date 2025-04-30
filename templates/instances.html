@@ -7,13 +7,14 @@
   <h1>AWS Instance Scheduler</h1>
   <h2>EC2 Instances</h2>
 
-  <form method="POST" action="/schedule-instances">
+  <form method="POST" action="{{ url_for('schedule_instances') }}">
     <table class="table">
       <thead>
         <tr>
           <th>Select</th>
           <th>Instance Name</th>
           <th>Instance ID</th>
+          <th>Region</th>
           <th>State</th>
         </tr>
       </thead>
@@ -27,6 +28,7 @@
           </td>
           <td>{{ instance.Name }}</td>
           <td><code>{{ instance.InstanceId }}</code></td>
+          <td>{{ instance.Region }}</td>
           <td>
             <span class="state-badge state-{{ instance.CurrentState|lower }}">
               {{ instance.CurrentState }}
@@ -36,10 +38,15 @@
         {% endfor %}
       </tbody>
     </table>
-    
+
     <div class="form-group">
       <label for="schedule_name">Schedule Name:</label>
-      <input type="text" id="schedule_name" name="schedule_name" required placeholder="Enter schedule name">
+      <select id="schedule_name" name="schedule_name" required class="form-control">
+        <option value="" disabled selected>Select a schedule</option>
+        {% for schedule in schedules %}
+          <option value="{{ schedule.name }}">{{ schedule.name }} ({{ schedule.action }})</option>
+        {% endfor %}
+      </select>
     </div>
     
     <button type="submit" class="btn">Apply Schedule</button>

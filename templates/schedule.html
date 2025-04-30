@@ -6,7 +6,7 @@
 <div class="aws-scheduler">
   <h1>Create New Schedule</h1>
   
-  <form method="POST" action="/create-schedule" class="schedule-form">
+  <form method="POST" action="/schedule/create" class="schedule-form">
     <div class="form-group">
       <label for="name">Schedule Name:</label>
       <input type="text" id="name" name="name" required placeholder="Enter schedule name">
@@ -14,7 +14,7 @@
 
     <div class="form-group">
       <label for="type">Schedule Type:</label>
-      <select id="type" name="type" class="form-control" required onchange="toggleUntilDate()">
+      <select id="type" name="schedule_type" class="form-control" required onchange="toggleUntilDate()">
         <option value="recurring">Recurring</option>
         <option value="one-time">One-Time</option>
       </select>

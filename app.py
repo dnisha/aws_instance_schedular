@@ -298,6 +298,9 @@ def instance_action(action: str, current_state: str, instance_id:str, instance_n
             'action_attempted': schedule['action'].lower()
         })
 
+def get_active_schedules():
+    return db_get_items(CONFIG_TABLE_NAME, filter_expression="active = :active_val", expression_attribute_values={":active_val": "true"})
+    
 
 def schedule_factory(data: dict):
     """Create data to insert in config table"""
@@ -306,16 +309,27 @@ def schedule_factory(data: dict):
     day_of_month = data['day_of_month']
     month = data['month']
     week = data['week']
+    schedule_type = data['schedule_type']
     status = str(data.get('status', 'false')).lower()
 
-    schedule_data = {
-        'name': data['name'],
-        'type': data['type'],
-        'action': data['action'],
-        'active': status,
-        'until': data['until'], 
-        'cron_expression': f"{minute} {hour} {day_of_month} {month} {week}",
-    }
+
+    if schedule_type == 'one-time':
+        schedule_data = {
+            'name': data['name'],
+            'schedule_type': data['schedule_type'],
+            'action': data['action'],
+            'active': status,
+            'cron_expression': f"{minute} {hour} {day_of_month} {month} {week}",
+        }
+    else:
+        schedule_data = {
+            'name': data['name'],
+            'schedule_type': data['schedule_type'],
+            'action': data['action'],
+            'active': status,
+            'until': data['until'], 
+            'cron_expression': f"{minute} {hour} {day_of_month} {month} {week}",
+        }
 
     db_put_item(CONFIG_TABLE_NAME, item=schedule_data)
     return schedule_data
@@ -341,18 +355,64 @@ def instances():
     result = get_filtered_ec2_instances(for_tag)
     return jsonify(result)
 
-@app.route('/api/v1/create_tag', methods=['POST'])
-def add_schedule_tag():
+@app.route('/schedule-instances', methods=['POST'])
+def schedule_instances():
 
-    data = request.get_json()
+        # Get selected instances and schedule name from form
+    selected_instances = request.form.getlist('selected_instances')
+    schedule_name = request.form.get('schedule_name')
+    
+    # Process each selected instance
+    results = []
+    for instance_info in selected_instances:
+        instance_id, region = instance_info.split('::')
+        
+        try:
+            # Add the schedule tag to the instance
+            response = add_tag_to_ec2_instance(
+                instance_id=instance_id,
+                instance_region=region,
+                schedule_name=schedule_name
+            )
+            
+            results.append({
+                'instance_id': instance_id,
+                'region': region,
+                'status': 'success',
+                'message': f'Schedule {schedule_name} applied successfully'
+            })
+            
+        except Exception as e:
+            results.append({
+                'instance_id': instance_id,
+                'region': region,
+                'status': 'error',
+                'message': str(e)
+            })
+    
+    # You can either:
+    # 1. Return a JSON response (for API)
+    # return jsonify({'results': results})
+    
+    # 2. Or redirect with flash messages (for web UI)
+    for result in results:
+        if result['status'] == 'success':
+            print(f"Successfully applied schedule to {result['instance_id']} ({result['region']})", 'success')
+        else:
+            print(f"Failed to apply schedule to {result['instance_id']}: {result['message']}", 'error')
+    
+    # return redirect(url_for('landing'))
 
-    instance_id = data['instance_id']
-    instance_region = data['instance_region']
-    schedule_name = data['schedule_name']
+    # data = request.get_json()
 
-    result = add_tag_to_ec2_instance(instance_id, instance_region, schedule_name, tag_name=DEFAULT_SCHEDULE_TAG_NAME)
+    # instance_id = data['instance_id']
+    # instance_region = data['instance_region']
+    # schedule_name = data['schedule_name']
 
-    return jsonify(result)
+    # result = add_tag_to_ec2_instance(instance_id, instance_region, schedule_name, tag_name=DEFAULT_SCHEDULE_TAG_NAME)
+
+    # return jsonify(response)
+    return redirect(url_for('landing'))
 
 @app.route('/api/v1/get_schedule/active', methods=['GET'])
 def get_all_active_schedules():
@@ -390,6 +450,12 @@ def get_all_active_schedules():
         
     return jsonify(applied_on_instances)
 
+@app.route('/api/v1/get_all_schedules', methods=['GET'])
+def configured_schelue():
+    data = get_active_schedules()
+    return jsonify(data)
+
+
 @app.route('/api/v1/schedule/instance', methods=['GET'])
 def schedule_instance():
 
@@ -402,6 +468,7 @@ def schedule_instance():
 
     return jsonify(data)
 
+
 @app.route('/instances')
 def get_instances():
     # Get all instances (pass None to get all instances regardless of tag)
@@ -413,12 +480,36 @@ def get_instances():
         for instance in instances:
             instance['Region'] = region  # Add region to each instance
             instances_list.append(instance)
+
+    # Get active schedules
+    active_schedules = get_active_schedules()
     
-    return render_template('instances.html', instances=instances_list)
+    return render_template('instances.html', instances=instances_list, schedules=active_schedules)
 
 @app.route('/schedule')
 def schedule_job():    
     return render_template('schedule.html')
+
+@app.route('/schedule/create', methods=['POST'])
+def create_schedule():    
+    name =  request.form['name']
+    schedule_type =  request.form['schedule_type']
+    action =  request.form['action']
+    status =  request.form['status']
+    until =  request.form['until']
+    minute =  request.form['minute']
+    hour =  request.form['hour']
+    day_of_month =  request.form['day_of_month']
+    month =  request.form['month']
+    week =  request.form['week']
+
+    schedule_item =  {'name': name, 'schedule_type': schedule_type, 'action': action, 'status': status, 'until': until, 'minute': minute, 'hour': hour, "day_of_month": day_of_month, 'month': month, 'week': week}
+
+    schedule_factory(data=schedule_item)
+
+    # print(f"schedule item is {schedule_item}")
+
+    return redirect(url_for('landing'))
 
 @app.route('/')
 def landing():    

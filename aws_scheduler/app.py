@@ -7,9 +7,11 @@ from botocore.exceptions import ClientError
 from apscheduler.schedulers.background import BackgroundScheduler
 from logging.config import dictConfig
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import atexit
+from typing import Optional
+
 
 REGION_DYNAMO_DB = "ap-south-1"  # region for DynamoDB tables
 REGIONS_EC2 = ["eu-central-1", "us-east-1", "ap-south-1"]  # EC2 regions to display
@@ -125,16 +127,17 @@ def db_get_items(
 def add_tag_to_ec2_instance(instance_id, instance_region, schedule_name, tag_name=DEFAULT_SCHEDULE_TAG_NAME):
     return EC2_CLIENTS[instance_region].create_tags(Resources=[instance_id], Tags=[{"Key": tag_name, "Value": schedule_name}])
 
-def should_execute(cron_expression: str, until_date: str) -> bool:
+def should_execute(cron_expression: str, until_date: Optional[str] = None) -> bool:
     """
-    Check if the current time matches the cron expression and is on or before the until date.
+    Check if the current time is <= the time represented by the cron expression.
+    Also checks if current date is <= until_date (if provided).
     
     Args:
         cron_expression: A string in cron format (e.g., "5 1 * * *")
-        until_date: A string in YYYY-MM-DD format (e.g., "2025-05-10")
+        until_date: Optional string in YYYY-MM-DD format (e.g., "2025-05-10")
         
     Returns:
-        bool: True if the process should run now, False otherwise
+        bool: True if current time <= cron time AND current date <= until_date (if provided)
     """
     try:
         # Parse cron expression
@@ -143,45 +146,40 @@ def should_execute(cron_expression: str, until_date: str) -> bool:
             raise ValueError("Invalid cron expression format")
             
         minute, hour, day_of_month, month, day_of_week = cron_parts
-        
-        # Parse until date (at midnight to include the entire day)
-        until = datetime.strptime(until_date, "%Y-%m-%d").date()
         now = datetime.now()
-        current_date = now.date()
         
-        # Check if current date is after until date
-        if current_date > until:
-            return False
-        
-        # Check minute
-        if minute != '*' and str(now.minute) != minute:
-            return False
-            
-        # Check hour
-        if hour != '*' and str(now.hour) != hour:
-            return False
-            
-        # Check day of month
-        if day_of_month != '*' and str(now.day) != day_of_month:
-            return False
-            
-        # Check month
-        if month != '*' and str(now.month) != month:
-            return False
-            
-        # Check day of week (0-6 where 0 is Sunday)
-        if day_of_week != '*':
-            # Convert cron day of week to Python's weekday (0=Monday)
-            cron_dow = int(day_of_week)
-            # Sunday special case (cron: 0 or 7 = Sunday, Python: 6 = Sunday)
-            if cron_dow == 0 or cron_dow == 7:
-                if now.weekday() != 6:  # Python's Sunday
-                    return False
-            elif (cron_dow - 1) != now.weekday():
+        # Check until_date if provided
+        if until_date:
+            until = datetime.strptime(until_date.strip(), "%Y-%m-%d").date()
+            if now.date() > until:
                 return False
-                
-        # All checks passed - should run now
-        return True
+        
+        # Build comparison datetime from cron parts (using current time for wildcards)
+        cron_minute = now.minute if minute == '*' else int(minute)
+        cron_hour = now.hour if hour == '*' else int(hour)
+        cron_day = now.day if day_of_month == '*' else int(day_of_month)
+        cron_month = now.month if month == '*' else int(month)
+        cron_year = now.year  # Always use current year
+        
+        # Handle day of week if specified (overrides day of month)
+        if day_of_week != '*':
+            cron_dow = int(day_of_week)
+            # Find next matching day of week (0=Sunday to 6=Saturday)
+            current_dow = (now.weekday() + 1) % 7  # Convert to cron's DOW
+            days_to_add = (cron_dow - current_dow) % 7
+            target_date = now.date() + timedelta(days=days_to_add)
+            cron_day = target_date.day
+            cron_month = target_date.month
+            cron_year = target_date.year
+        
+        try:
+            cron_time = datetime(cron_year, cron_month, cron_day, cron_hour, cron_minute)
+        except ValueError:
+            # Invalid date (e.g., Feb 30), so can't match
+            return False
+        
+        # Compare current time with cron time
+        return now <= cron_time
         
     except Exception as e:
         print(f"Error processing cron expression: {e}")
@@ -294,8 +292,7 @@ def instance_action(action: str, current_state: str, instance_id:str, instance_n
         result['errors'].append({
             'instance_id': instance_id,
             'region': region,
-            'error': str(e),
-            'action_attempted': schedule['action'].lower()
+            'error': str(e)
         })
 
 def get_active_schedules():
@@ -334,26 +331,42 @@ def schedule_factory(data: dict):
     db_put_item(CONFIG_TABLE_NAME, item=schedule_data)
     return schedule_data
 
+def scan_for_action():
+
+    applied_on_instances = []
+
+    active_schedules =  get_active_schedules()
+
+    for schedule in active_schedules:
+
+        instances =  get_filtered_ec2_instances(schedule['name'])
+
+        print(f"got cron_expression as  {schedule.get('cron_expression')} and until as {schedule.get('until', None)}")
+
+        will_execute = should_execute(cron_expression=schedule.get('cron_expression'), until_date=schedule.get('until'))
+
+        print(f"will_execute {will_execute}")
+
+        if will_execute == True:
+
+            for region, instances in instances.items():
+
+                print(f"Region: {region}")
+
+                if instances:  # Check if the list is not empty
+                    for instance in instances:
+
+                        applied_on_instances = instance_action(action=schedule['action'], current_state=instance['CurrentState'], instance_id=instance['InstanceId'], instance_name=instance['Name'], region=region, schedule_name=schedule['name'])
+                else:
+                    print("  No instances in this region {region}")
+        
+    return {"status": "success", "processed_instances": applied_on_instances}
+
 app = Flask(__name__)
 
 @app.route('/api/v1/healthz')
 def health_check():
     return jsonify({"status": "healthy"})
-
-@app.route('/api/v1/schedule', methods=['POST'])
-def schedule():
-    data = request.get_json()
-    result = schedule_factory(data=data)
-    return jsonify(result)
-
-@app.route('/api/v1/instances', methods=['GET'])
-def instances():
-
-    for_tag = request.args.get('for_tag') 
-
-    print(f"for_tag {for_tag}")
-    result = get_filtered_ec2_instances(for_tag)
-    return jsonify(result)
 
 @app.route('/schedule-instances', methods=['POST'])
 def schedule_instances():
@@ -369,7 +382,7 @@ def schedule_instances():
         
         try:
             # Add the schedule tag to the instance
-            response = add_tag_to_ec2_instance(
+            add_tag_to_ec2_instance(
                 instance_id=instance_id,
                 instance_region=region,
                 schedule_name=schedule_name
@@ -390,84 +403,13 @@ def schedule_instances():
                 'message': str(e)
             })
     
-    # You can either:
-    # 1. Return a JSON response (for API)
-    # return jsonify({'results': results})
-    
-    # 2. Or redirect with flash messages (for web UI)
     for result in results:
         if result['status'] == 'success':
             print(f"Successfully applied schedule to {result['instance_id']} ({result['region']})", 'success')
         else:
             print(f"Failed to apply schedule to {result['instance_id']}: {result['message']}", 'error')
     
-    # return redirect(url_for('landing'))
-
-    # data = request.get_json()
-
-    # instance_id = data['instance_id']
-    # instance_region = data['instance_region']
-    # schedule_name = data['schedule_name']
-
-    # result = add_tag_to_ec2_instance(instance_id, instance_region, schedule_name, tag_name=DEFAULT_SCHEDULE_TAG_NAME)
-
-    # return jsonify(response)
     return redirect(url_for('landing'))
-
-@app.route('/api/v1/get_schedule/active', methods=['GET'])
-def get_all_active_schedules():
-
-    applied_on_instances = []
-
-    ## get all active schedule and perform action
-
-    active_schedules =  db_get_items(CONFIG_TABLE_NAME, filter_expression="active = :active_val", expression_attribute_values={":active_val": "true"})
-
-    for schedule in active_schedules:
-
-        instances =  get_filtered_ec2_instances(schedule['name'])
-
-        print(f"got cron_expression as  {schedule['cron_expression']} and until as {schedule['until']}")
-
-        will_execute = should_execute(cron_expression=schedule['cron_expression'], until_date=schedule['until'])
-
-        print(f"will_execute {will_execute}")
-
-        if will_execute == True:
-
-            for region, instances in instances.items():
-
-                print(f"Region: {region}")
-
-                if instances:  # Check if the list is not empty
-                    for instance in instances:
-                        # print(f"  Instance ID: {instance['InstanceId']}")
-                        # print(f"  Name: {instance['Name']}")
-
-                        applied_on_instances = instance_action(action=schedule['action'], current_state=instance['CurrentState'], instance_id=instance['InstanceId'], instance_name=instance['Name'], region=region, schedule_name=schedule['name'])
-                else:
-                    print("  No instances in this region {region}")
-        
-    return jsonify(applied_on_instances)
-
-@app.route('/api/v1/get_all_schedules', methods=['GET'])
-def configured_schelue():
-    data = get_active_schedules()
-    return jsonify(data)
-
-
-@app.route('/api/v1/schedule/instance', methods=['GET'])
-def schedule_instance():
-
-    data = request.get_json()
-    instance_id = data['instance_id']
-    schedule_name = data['schedule_name']
-    instance_region = data['instance_region']
-
-    result = add_tag_to_ec2_instance(instance_id, instance_region, schedule_name, tag_name=DEFAULT_SCHEDULE_TAG_NAME)
-
-    return jsonify(data)
-
 
 @app.route('/instances')
 def get_instances():
@@ -519,7 +461,7 @@ def cron_trigerred():
     print(f"cron trigerred")
 
 # Initialize scheduler
-# scheduler = BackgroundScheduler()
+scheduler = BackgroundScheduler()
 # scheduler.add_job(
 #     func=return_default_tag_to_instances,
 #     trigger="cron",
@@ -529,12 +471,12 @@ def cron_trigerred():
 # )
 
 # Test cron
-# scheduler.add_job(
-#     func=cron_trigerred,
-#     trigger="interval",
-#     seconds=15,
-#     timezone="Asia/Kolkata"
-# )   
+scheduler.add_job(
+    func=scan_for_action,
+    trigger="interval",
+    seconds=60,
+    timezone="Asia/Kolkata"
+)   
 
-# scheduler.start()
-# atexit.register(lambda: scheduler.shutdown())
+scheduler.start()
+atexit.register(lambda: scheduler.shutdown())
